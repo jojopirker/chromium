@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/tabs/vertical/tab_collection_node.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "base/functional/bind.h"
@@ -151,6 +152,7 @@ bool TabCollectionNode::RemoveNodeById(const tabs_api::NodeId& node_id) {
         node_view_->RemoveChildViewT(children_[i]->node_view_);
         node_view_->InvalidateLayout();
       }
+      children_[i]->parent_ = nullptr;
       children_.erase(children_.begin() + i);
       return true;
     }
@@ -159,6 +161,38 @@ bool TabCollectionNode::RemoveNodeById(const tabs_api::NodeId& node_id) {
     }
   }
   return false;
+}
+
+bool TabCollectionNode::MoveChild(TabCollectionNode* child_node,
+                                  size_t target_index) {
+  auto it = std::find_if(children_.begin(), children_.end(),
+                         [child_node](const std::unique_ptr<TabCollectionNode>& entry) {
+                           return entry.get() == child_node;
+                         });
+  if (it == children_.end()) {
+    return false;
+  }
+
+  size_t current_index = static_cast<size_t>(std::distance(children_.begin(), it));
+  if (current_index == target_index) {
+    return true;
+  }
+
+  auto node_ptr = std::move(*it);
+  children_.erase(it);
+
+  if (target_index > children_.size()) {
+    target_index = children_.size();
+  }
+
+  children_.insert(children_.begin() + target_index, std::move(node_ptr));
+
+  if (node_view_ && child_node->node_view_) {
+    node_view_->ReorderChildView(child_node->node_view_,
+                                 static_cast<int>(target_index));
+    node_view_->InvalidateLayout();
+  }
+  return true;
 }
 
 std::vector<views::View*> TabCollectionNode::GetDirectChildren() const {
@@ -179,6 +213,7 @@ std::unique_ptr<views::View> TabCollectionNode::CreateAndSetView() {
 void TabCollectionNode::AddChild(std::unique_ptr<views::View> child_node_view,
                                  std::unique_ptr<TabCollectionNode> child_node,
                                  size_t model_index) {
+  child_node->parent_ = this;
   children_.insert(children_.begin() + model_index, std::move(child_node));
   // Add child view after inserting the child node into children_, as adding the
   // view may depend on the order of the node in children_.

@@ -4,15 +4,20 @@
 
 #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_view.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/views/tabs/vertical/tab_collection_node.h"
+#include "chrome/browser/ui/tabs/tab_group_theme.h"
+#include "chrome/browser/ui/tabs/tab_strip_api/utilities/tab_strip_api_utilities.h"
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_service.h"
+#include "chrome/browser/ui/views/tabs/vertical/tab_collection_node.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/browser_apis/tab_strip/types/position.h"
 #include "components/browser_apis/tab_strip/tab_strip_api_data_model.mojom.h"
 #include "components/browser_apis/tab_strip/tab_strip_api_types.mojom.h"
+#include "components/tab_groups/tab_group_color.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -26,13 +31,19 @@
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/vector2d.h"
+#include "ui/gfx/transform.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/view_utils.h"
+#include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 namespace {
@@ -41,6 +52,12 @@ constexpr int kVerticalTabDefaultWidth = 220;
 constexpr int kCornerRadius = 8;
 constexpr gfx::Insets kTabPadding = gfx::Insets::VH(6, 12);
 constexpr int kIconSize = 16;
+constexpr int kPinnedTabPreferredWidth = 48;
+constexpr int kGroupIndicatorWidth = 4;
+constexpr SkColor kDragPlaceholderBorderColor =
+    SkColorSetARGB(160, 66, 133, 244);
+constexpr SkColor kDragPlaceholderFillColor =
+    SkColorSetARGB(48, 66, 133, 244);
 
 std::u16string GetDisplayTitle(const tabs_api::mojom::Tab& tab_data) {
   if (!tab_data.title.empty()) {
@@ -72,6 +89,11 @@ VerticalTabView::VerticalTabView(TabCollectionNode* collection_node)
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
   SetNotifyEnterExitOnChild(true);
+
+  group_indicator_ = AddChildView(std::make_unique<views::View>());
+  group_indicator_->SetPreferredSize(
+      gfx::Size(kGroupIndicatorWidth, kVerticalTabHeight));
+  group_indicator_->SetVisible(false);
 
   favicon_view_ = AddChildView(std::make_unique<views::ImageView>());
   favicon_view_->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
@@ -125,6 +147,8 @@ void VerticalTabView::UpdateFromData(const tabs_api::mojom::Tab& tab_data) {
   is_active_ = tab_data.is_active;
   is_selected_ = tab_data.is_selected;
 
+  UpdatePinnedState();
+
   const std::u16string title = GetDisplayTitle(tab_data);
   title_label_->SetText(title);
   SetTooltipText(title);
@@ -146,10 +170,10 @@ void VerticalTabView::UpdateFromData(const tabs_api::mojom::Tab& tab_data) {
 
 gfx::Size VerticalTabView::CalculatePreferredSize(
     const views::SizeBounds& available_size) const {
-  const int width =
-      available_size.width().is_bounded()
-          ? available_size.width().value()
-          : kVerticalTabDefaultWidth;
+  const int width = is_pinned_ ? kPinnedTabPreferredWidth
+                               : (available_size.width().is_bounded()
+                                      ? available_size.width().value()
+                                      : kVerticalTabDefaultWidth);
   return gfx::Size(width, kVerticalTabHeight);
 }
 
@@ -172,6 +196,14 @@ void VerticalTabView::OnMouseExited(const ui::MouseEvent& event) {
 
 bool VerticalTabView::OnMousePressed(const ui::MouseEvent& event) {
   if (event.IsOnlyLeftMouseButton()) {
+    drag_pending_ = true;
+    dragging_ = false;
+    drop_index_.reset();
+    drop_container_ = nullptr;
+    drop_placeholder_ = nullptr;
+    drag_start_index_ = 0;
+    drag_start_point_ = event.location();
+    drag_start_root_location_ = event.root_location();
     RequestFocus();
     return true;
   }
@@ -180,6 +212,13 @@ bool VerticalTabView::OnMousePressed(const ui::MouseEvent& event) {
 
 void VerticalTabView::OnMouseReleased(const ui::MouseEvent& event) {
   views::View::OnMouseReleased(event);
+  if (dragging_) {
+    CompleteDrag(event);
+    return;
+  }
+
+  drag_pending_ = false;
+
   if (!event.IsOnlyLeftMouseButton() || !tab_id_.has_value()) {
     return;
   }
@@ -192,12 +231,40 @@ void VerticalTabView::OnMouseReleased(const ui::MouseEvent& event) {
   ActivateTab();
 }
 
+bool VerticalTabView::OnMouseDragged(const ui::MouseEvent& event) {
+  if (!drag_pending_ && !dragging_) {
+    return View::OnMouseDragged(event);
+  }
+
+  if (!dragging_) {
+    gfx::Vector2d delta = event.location() - drag_start_point_;
+    if (!View::ExceededDragThreshold(delta)) {
+      return true;
+    }
+    StartDrag();
+  }
+
+  if (dragging_) {
+    UpdateDrag(event);
+  }
+  return true;
+}
+
 bool VerticalTabView::OnKeyPressed(const ui::KeyEvent& event) {
   if (event.key_code() == ui::VKEY_RETURN || event.key_code() == ui::VKEY_SPACE) {
     ActivateTab();
     return true;
   }
   return View::OnKeyPressed(event);
+}
+
+void VerticalTabView::OnMouseCaptureLost() {
+  views::View::OnMouseCaptureLost();
+  if (!dragging_) {
+    drag_pending_ = false;
+    return;
+  }
+  ResetDragState(drag_start_index_);
 }
 
 void VerticalTabView::ResetCollectionNode() {
@@ -218,6 +285,8 @@ void VerticalTabView::UpdateVisualState() {
   SkColor hover_background =
       color_provider ? color_provider->GetColor(ui::kColorButtonBackground)
                      : SkColorSetARGB(30, 0, 0, 0);
+
+  UpdateGroupIndicator(color_provider);
 
   if (is_active_) {
     SetBackground(views::CreateRoundedRectBackground(active_background,
@@ -259,6 +328,299 @@ void VerticalTabView::UpdateCloseButtonIcon(
   close_button_->SetImageModel(
       views::Button::STATE_PRESSED,
       ui::ImageModel::FromVectorIcon(vector_icons::kCloseRoundedIcon, icon_color));
+}
+
+void VerticalTabView::UpdatePinnedState() {
+  bool pinned = false;
+  if (collection_node_) {
+    if (TabCollectionNode* parent = collection_node_->parent()) {
+      pinned = parent->GetType() == TabCollectionNode::Type::kPinnedTabs;
+    }
+  }
+
+  is_pinned_ = pinned;
+  title_label_->SetVisible(!is_pinned_);
+  if (close_button_) {
+    close_button_->SetVisible(!is_pinned_);
+  }
+  if (group_indicator_) {
+    group_indicator_->SetVisible(!is_pinned_ && in_tab_group_);
+  }
+  InvalidateLayout();
+}
+
+void VerticalTabView::UpdateGroupIndicator(
+    const ui::ColorProvider* color_provider) {
+  if (!group_indicator_) {
+    return;
+  }
+
+  in_tab_group_ = false;
+  TabCollectionNode* group_node =
+      FindAncestorOfType(TabCollectionNode::Type::kTabGroup);
+  if (!group_node || !group_node->data() ||
+      !group_node->data()->is_tab_group()) {
+    group_indicator_->SetVisible(false);
+    return;
+  }
+
+  const auto& tab_group_ptr = group_node->data()->get_tab_group();
+  if (!tab_group_ptr) {
+    group_indicator_->SetVisible(false);
+    return;
+  }
+
+  in_tab_group_ = true;
+  const tab_groups::TabGroupVisualData& group_data = (*tab_group_ptr).data;
+  tab_group_color_id_ = group_data.color();
+
+  const bool active_frame = GetWidget() ? GetWidget()->IsActive() : false;
+  ui::ColorId color_id =
+      GetTabGroupTabStripColorId(tab_group_color_id_, active_frame);
+  const SkColor indicator_color =
+      color_provider ? color_provider->GetColor(color_id) : SK_ColorTRANSPARENT;
+
+  group_indicator_->SetBackground(
+      views::CreateSolidBackground(indicator_color));
+  group_indicator_->SetPreferredSize(
+      gfx::Size(kGroupIndicatorWidth, kVerticalTabHeight));
+  group_indicator_->SetVisible(!is_pinned_);
+}
+
+TabCollectionNode* VerticalTabView::FindAncestorOfType(
+    TabCollectionNode::Type type) const {
+  TabCollectionNode* current =
+      collection_node_ ? collection_node_->parent() : nullptr;
+  while (current) {
+    if (current->GetType() == type) {
+      return current;
+    }
+    current = current->parent();
+  }
+  return nullptr;
+}
+
+void VerticalTabView::StartDrag() {
+  drag_pending_ = false;
+  dragging_ = true;
+  drop_container_ = parent();
+  drop_placeholder_ = nullptr;
+  drop_index_.reset();
+  is_hovered_ = false;
+  UpdateVisualState();
+  if (drop_container_) {
+    int current_index = drop_container_->GetIndexOf(this);
+    if (current_index >= 0) {
+      drag_start_index_ = static_cast<size_t>(current_index);
+      auto placeholder = std::make_unique<views::View>();
+      placeholder->SetPreferredSize(bounds().size());
+
+      const ui::ColorProvider* color_provider = GetColorProvider();
+      SkColor border_color = color_provider
+                                 ? color_provider->GetColor(ui::kColorFocusRing)
+                                 : kDragPlaceholderBorderColor;
+      SkColor fill_color =
+          color_provider ? SkColorSetA(border_color, 48)
+                         : kDragPlaceholderFillColor;
+      placeholder->SetBackground(
+          views::CreateRoundedRectBackground(fill_color, kCornerRadius));
+      placeholder->SetBorder(
+          views::CreateRoundedRectBorder(2, kCornerRadius, border_color));
+
+      drop_placeholder_ = drop_container_->AddChildView(std::move(placeholder));
+      drop_container_->ReorderChildView(drop_placeholder_, current_index);
+      drop_container_->ReorderChildView(
+          this, drop_container_->children().size() - 1);
+      SetProperty(views::kViewIgnoredByLayoutKey, true);
+      drop_index_ = drag_start_index_;
+      drop_container_->InvalidateLayout();
+    }
+  }
+
+  SetPaintToLayer();
+  if (layer()) {
+    layer()->SetFillsBoundsOpaquely(false);
+    layer()->SetOpacity(1.0f);
+    layer()->SetTransform(gfx::Transform());
+  }
+
+  if (views::Widget* widget = GetWidget()) {
+    widget->SetCapture(this);
+  }
+}
+
+void VerticalTabView::UpdateDrag(const ui::MouseEvent& event) {
+  if (!dragging_) {
+    return;
+  }
+
+  drop_index_ = CalculateDropIndex(event.location());
+  if (!drop_container_) {
+    return;
+  }
+
+  gfx::Vector2d delta = event.root_location() - drag_start_root_location_;
+  if (layer()) {
+    gfx::Transform transform;
+    transform.Translate(0, static_cast<float>(delta.y()));
+    layer()->SetTransform(transform);
+  }
+
+  if (!drop_index_.has_value()) {
+    return;
+  }
+
+  if (drop_placeholder_) {
+    int placeholder_index = drop_container_->GetIndexOf(drop_placeholder_);
+    if (placeholder_index < 0 ||
+        static_cast<size_t>(placeholder_index) != drop_index_.value()) {
+      drop_container_->ReorderChildView(
+          drop_placeholder_, static_cast<int>(drop_index_.value()));
+      drop_container_->InvalidateLayout();
+    }
+  }
+}
+
+void VerticalTabView::CompleteDrag(const ui::MouseEvent& event) {
+  if (!dragging_) {
+    ResetDragState(/*final_index=*/std::nullopt);
+    return;
+  }
+
+  if (!drop_index_.has_value()) {
+    drop_index_ = CalculateDropIndex(event.location());
+  }
+
+  if (!collection_node_ || !collection_node_->parent() ||
+      !drop_index_.has_value()) {
+    ResetDragState(drag_start_index_);
+    return;
+  }
+
+  TabCollectionNode* parent_node = collection_node_->parent();
+  const auto& siblings = parent_node->children();
+  auto it = std::find_if(
+      siblings.begin(), siblings.end(),
+      [this](const std::unique_ptr<TabCollectionNode>& child) {
+        return child.get() == collection_node_;
+      });
+  if (it == siblings.end()) {
+    ResetDragState(drag_start_index_);
+    return;
+  }
+
+  size_t current_index =
+      static_cast<size_t>(std::distance(siblings.begin(), it));
+  size_t target_index = drop_index_.value();
+
+  // Clamp target_index to the number of siblings with associated views.
+  size_t max_index = 0;
+  for (const auto& sibling : siblings) {
+    if (sibling.get() == collection_node_) {
+      continue;
+    }
+    if (!sibling->node_view()) {
+      continue;
+    }
+    ++max_index;
+  }
+  if (target_index > max_index) {
+    target_index = max_index;
+  }
+
+  if (target_index == current_index) {
+    ResetDragState(current_index);
+    return;
+  }
+
+  std::optional<tabs_api::NodeId> parent_id;
+  if (parent_node->data()) {
+    parent_id =
+        tabs_api::NodeId(tabs_api::utils::GetNodeId(*parent_node->data()));
+  }
+  tabs_api::Position position(target_index, parent_id);
+
+  bool move_succeeded = false;
+  if (service_ && tab_id_.has_value()) {
+    auto move_result = service_->MoveNode(tab_id_.value(), position);
+    move_succeeded = move_result.has_value();
+  }
+
+  if (move_succeeded) {
+    parent_node->MoveChild(collection_node_, target_index);
+  } else {
+    target_index = current_index;
+  }
+
+  ResetDragState(target_index);
+}
+
+void VerticalTabView::ResetDragState(std::optional<size_t> final_index) {
+  if (dragging_) {
+    if (views::Widget* widget = GetWidget()) {
+      if (widget->HasCapture()) {
+        widget->ReleaseCapture();
+      }
+    }
+  }
+
+  if (layer()) {
+    layer()->SetTransform(gfx::Transform());
+    DestroyLayer();
+  }
+
+  if (drop_container_) {
+    if (drop_placeholder_) {
+      drop_container_->RemoveChildViewT(drop_placeholder_);
+      drop_placeholder_ = nullptr;
+    }
+    if (final_index.has_value()) {
+      drop_container_->ReorderChildView(
+          this, static_cast<int>(final_index.value()));
+      drag_start_index_ = final_index.value();
+    }
+    drop_container_->InvalidateLayout();
+  }
+
+  dragging_ = false;
+  drag_pending_ = false;
+  drop_container_ = nullptr;
+  drop_placeholder_ = nullptr;
+  drop_index_.reset();
+  SetProperty(views::kViewIgnoredByLayoutKey, false);
+}
+
+size_t VerticalTabView::CalculateDropIndex(const gfx::Point& location) const {
+  if (!collection_node_ || !collection_node_->parent()) {
+    return 0u;
+  }
+
+  TabCollectionNode* parent_node = collection_node_->parent();
+  views::View* parent_view = parent_node->node_view();
+  if (!parent_view) {
+    return 0u;
+  }
+
+  gfx::Point location_in_parent = location;
+  views::View::ConvertPointToTarget(this, parent_view, &location_in_parent);
+
+  size_t index = 0;
+  for (const auto& sibling : parent_node->children()) {
+    if (sibling.get() == collection_node_) {
+      continue;
+    }
+    views::View* sibling_view = sibling->node_view();
+    if (!sibling_view || !sibling_view->GetVisible()) {
+      continue;
+    }
+
+    const int midpoint = sibling_view->bounds().CenterPoint().y();
+    if (location_in_parent.y() < midpoint) {
+      break;
+    }
+    ++index;
+  }
+  return index;
 }
 
 void VerticalTabView::ActivateTab() {

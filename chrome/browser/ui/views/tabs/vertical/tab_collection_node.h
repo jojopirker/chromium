@@ -62,6 +62,7 @@ class TabCollectionNode {
                    size_t model_index);
 
   bool RemoveNodeById(const tabs_api::NodeId& node_id);
+  bool MoveChild(TabCollectionNode* child_node, size_t target_index);
 
   const tabs_api::mojom::DataPtr& data() const { return data_; }
   const Children& children() const { return children_; }
@@ -70,6 +71,8 @@ class TabCollectionNode {
   Type GetType() const { return data_->which(); }
 
   tabs_api::TabStripService* service() const { return service_; }
+
+  TabCollectionNode* parent() const { return parent_; }
 
   void set_add_child_to_node(CustomAddChildViewCallback add_child_to_node) {
     add_child_to_node_ = std::move(add_child_to_node);
@@ -80,6 +83,7 @@ class TabCollectionNode {
 
   static void SetViewFactoryForTesting(ViewFactory factory);
   views::View* get_view_for_testing() { return node_view_; }
+  views::View* node_view() const { return node_view_; }
 
  protected:
   // Returns the pass key to be used by derived classes so that methods such as
@@ -108,6 +112,7 @@ class TabCollectionNode {
 
   // 1:1 mapping of the collections children.
   Children children_;
+  raw_ptr<TabCollectionNode> parent_ = nullptr;
 
   // add_child_to_node_ must be assigned when constructing the node_view in
   // Initialize so that the children that are created know how to be added to

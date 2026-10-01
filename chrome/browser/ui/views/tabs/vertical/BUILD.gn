@@ -52,6 +52,7 @@ source_set("impl") {
     "//chrome/browser/ui/tabs/tab_strip_api",
     "//chrome/browser/ui/tabs/tab_strip_api/utilities",
     "//chrome/app:generated_resources",
+    "//components/browser_apis/tab_strip/types:types",
     "//components/vector_icons",
     "//ui/base",
   ]
