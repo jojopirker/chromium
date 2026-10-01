@@ -51,6 +51,9 @@ source_set("impl") {
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs/tab_strip_api",
     "//chrome/browser/ui/tabs/tab_strip_api/utilities",
+    "//chrome/app:generated_resources",
+    "//components/vector_icons",
+    "//ui/base",
   ]
 
   public_deps = [ "//chrome/browser:browser_public_dependencies" ]

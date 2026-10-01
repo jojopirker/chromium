@@ -20,6 +20,10 @@ namespace views {
 class View;
 }
 
+namespace tabs_api {
+class TabStripService;
+}  // namespace tabs_api
+
 class TabCollectionNode {
  public:
   // Helper type for creating CustomAddChildViewCallbacks with
@@ -34,7 +38,8 @@ class TabCollectionNode {
   using ViewFactory =
       base::RepeatingCallback<std::unique_ptr<views::View>(TabCollectionNode*)>;
 
-  explicit TabCollectionNode(tabs_api::mojom::DataPtr data);
+  TabCollectionNode(tabs_api::mojom::DataPtr data,
+                    tabs_api::TabStripService* service);
   virtual ~TabCollectionNode();
 
   // Creates the view for this node. Then, for each child container in children,
@@ -56,11 +61,15 @@ class TabCollectionNode {
                    tabs_api::mojom::DataPtr data,
                    size_t model_index);
 
+  bool RemoveNodeById(const tabs_api::NodeId& node_id);
+
   const tabs_api::mojom::DataPtr& data() const { return data_; }
   const Children& children() const { return children_; }
   std::vector<views::View*> GetDirectChildren() const;
 
   Type GetType() const { return data_->which(); }
+
+  tabs_api::TabStripService* service() const { return service_; }
 
   void set_add_child_to_node(CustomAddChildViewCallback add_child_to_node) {
     add_child_to_node_ = std::move(add_child_to_node);
@@ -95,6 +104,7 @@ class TabCollectionNode {
   // the current collection_data object. provided by snapshot and updated
   // through TabObserver.
   tabs_api::mojom::DataPtr data_;
+  raw_ptr<tabs_api::TabStripService> service_ = nullptr;
 
   // 1:1 mapping of the collections children.
   Children children_;

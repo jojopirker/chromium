@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/views/tabs/vertical/vertical_unpinned_tab_container_view.h"
 #include "components/browser_apis/tab_strip/tab_strip_api_types.mojom.h"
 #include "ui/views/view.h"
+#include "ui/views/view_utils.h"
 
 namespace {
 
@@ -70,8 +71,9 @@ std::unique_ptr<views::View> TabCollectionNode::CreateViewForNode(
   return std::make_unique<CollectionTestViewImpl>(node_for_view);
 }
 
-TabCollectionNode::TabCollectionNode(tabs_api::mojom::DataPtr data)
-    : data_(std::move(data)) {}
+TabCollectionNode::TabCollectionNode(tabs_api::mojom::DataPtr data,
+                                     tabs_api::TabStripService* service)
+    : data_(std::move(data)), service_(service) {}
 
 TabCollectionNode::~TabCollectionNode() {
   on_will_destroy_callback_list_.Notify();
@@ -85,8 +87,8 @@ std::unique_ptr<views::View> TabCollectionNode::Initialize(
   std::unique_ptr<views::View> node_view = CreateAndSetView();
 
   for (auto& child_container : child_containers) {
-    auto child_node =
-        std::make_unique<TabCollectionNode>(std::move(child_container->data));
+    auto child_node = std::make_unique<TabCollectionNode>(
+        std::move(child_container->data), service_);
     auto child_node_view =
         child_node->Initialize(std::move(child_container->children));
     AddChild(std::move(child_node_view), std::move(child_node),
@@ -99,7 +101,20 @@ std::unique_ptr<views::View> TabCollectionNode::Initialize(
 void TabCollectionNode::SetData(base::PassKey<TabCollectionNode> pass_key,
                                 tabs_api::mojom::DataPtr data) {
   data_ = std::move(data);
-  // TODO(crbug.com/439960283): Pipe data to node_view_.
+  if (!node_view_) {
+    return;
+  }
+
+  switch (data_->which()) {
+    case Type::kTab:
+      if (auto* tab_view =
+              views::AsViewClass<VerticalTabView>(node_view_)) {
+        tab_view->UpdateFromData(*data_->get_tab());
+      }
+      break;
+    default:
+      break;
+  }
 }
 
 // TODO(crbug.com/450976282): Consider having a map at the root level, or using
@@ -123,9 +138,27 @@ TabCollectionNode* TabCollectionNode::GetNodeForId(
 void TabCollectionNode::AddNewChild(base::PassKey<TabCollectionNode> pass_key,
                                     tabs_api::mojom::DataPtr data,
                                     size_t model_index) {
-  auto child_node = std::make_unique<TabCollectionNode>(std::move(data));
+  auto child_node =
+      std::make_unique<TabCollectionNode>(std::move(data), service_);
   auto child_node_view = child_node->CreateAndSetView();
   AddChild(std::move(child_node_view), std::move(child_node), model_index);
+}
+
+bool TabCollectionNode::RemoveNodeById(const tabs_api::NodeId& node_id) {
+  for (size_t i = 0; i < children_.size(); ++i) {
+    if (tabs_api::utils::GetNodeId(*children_[i]->data_) == node_id) {
+      if (node_view_ && children_[i]->node_view_) {
+        node_view_->RemoveChildViewT(children_[i]->node_view_);
+        node_view_->InvalidateLayout();
+      }
+      children_.erase(children_.begin() + i);
+      return true;
+    }
+    if (children_[i]->RemoveNodeById(node_id)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::vector<views::View*> TabCollectionNode::GetDirectChildren() const {

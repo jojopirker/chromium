@@ -19,7 +19,7 @@ RootTabCollectionNode::RootTabCollectionNode(
     tabs_api::TabStripService* tab_strip_service,
     tabs_api::mojom::ContainerPtr container,
     CustomAddChildViewCallback add_node_view_to_parent)
-    : TabCollectionNode(std::move(container->data)) {
+    : TabCollectionNode(std::move(container->data), tab_strip_service) {
   add_node_view_to_parent.Run(Initialize(std::move(container->children)));
   service_observer_.Observe(tab_strip_service);
 }
@@ -39,7 +39,15 @@ void RootTabCollectionNode::OnTabsCreated(
 }
 
 void RootTabCollectionNode::OnTabsClosed(
-    const tabs_api::mojom::OnTabsClosedEventPtr& tabs_closed_event) {}
+    const tabs_api::mojom::OnTabsClosedEventPtr& tabs_closed_event) {
+  if (!tabs_closed_event) {
+    return;
+  }
+
+  for (const auto& closed_tab_id : tabs_closed_event->tabs) {
+    RemoveNodeById(closed_tab_id);
+  }
+}
 
 void RootTabCollectionNode::OnNodeMoved(
     const tabs_api::mojom::OnNodeMovedEventPtr& node_moved_event) {}
