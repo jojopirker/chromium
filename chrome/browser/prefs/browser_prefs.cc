@@ -1198,7 +1198,9 @@ void RegisterLocalStatePrefsForMigration(PrefRegistrySimple* registry) {
 void RegisterProfilePrefsForMigration(
     user_prefs::PrefRegistrySyncable* registry) {
   chrome_browser_net::secure_dns::RegisterProbesSettingBackupPref(registry);
-
+// #if !BUILDFLAG(IS_ANDROID)
+//   registry->RegisterBooleanPref(prefs::kVerticalTabsEnabled, true);
+// #endif
   // Deprecated 10/2024.
   registry->RegisterIntegerPref(kModelExecutionMainToggleSettingState, 0);
 

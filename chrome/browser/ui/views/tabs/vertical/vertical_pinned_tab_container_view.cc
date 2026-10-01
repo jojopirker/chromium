@@ -10,6 +10,10 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/text_constants.h"
+#include "ui/compositor/layer.h"
+#include "ui/views/background.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/layout/delegating_layout_manager.h"
 #include "ui/views/layout/proposed_layout.h"
 #include "ui/views/view.h"
@@ -17,12 +21,24 @@
 
 namespace {
 constexpr int kTabVerticalPadding = 4;
+constexpr char16_t kPinnedPlaceholderText[] = u"Sample pinned tab";
 }  // namespace
 
 VerticalPinnedTabContainerView::VerticalPinnedTabContainerView(
     TabCollectionNode* collection_node)
     : collection_node_(collection_node) {
   SetLayoutManager(std::make_unique<views::DelegatingLayoutManager>(this));
+  placeholder_label_ =
+      AddChildView(std::make_unique<views::Label>(kPinnedPlaceholderText));
+  placeholder_label_->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
+  placeholder_label_->SetBackground(
+      views::CreateSolidBackground(ui::kColorFrameActive));
+  placeholder_label_->SetEnabledColor(ui::kColorLabelForeground);
+  placeholder_label_->SetAutoColorReadabilityEnabled(false);
+  placeholder_label_->SetSubpixelRenderingEnabled(false);
+  placeholder_label_->SetPaintToLayer();
+  placeholder_label_->layer()->SetFillsBoundsOpaquely(true);
+
   node_destroyed_subscription_ = collection_node_->RegisterWillDestroyCallback(
       base::BindOnce(&VerticalPinnedTabContainerView::ResetCollectionNode,
                      base::Unretained(this)));
@@ -37,6 +53,27 @@ views::ProposedLayout VerticalPinnedTabContainerView::CalculateProposedLayout(
   int total_height = 0;
 
   const auto children = collection_node_->GetDirectChildren();
+  const bool has_children = !children.empty();
+
+  if (!has_children) {
+    const int available_width =
+        size_bounds.width().is_bounded()
+            ? size_bounds.width().value()
+            : placeholder_label_->GetPreferredSize().width();
+    const int placeholder_height =
+        placeholder_label_->GetHeightForWidth(available_width);
+    gfx::Rect placeholder_bounds(
+        0, 0, available_width,
+        placeholder_height > 0 ? placeholder_height
+                               : placeholder_label_->GetPreferredSize().height());
+    layouts.child_layouts.emplace_back();
+    auto& placeholder_layout = layouts.child_layouts.back();
+    placeholder_layout.child_view = placeholder_label_;
+    placeholder_layout.visible = true;
+    placeholder_layout.bounds = placeholder_bounds;
+    layouts.host_size = placeholder_bounds.size();
+    return layouts;
+  }
 
   int x = 0;
   int y = 0;
@@ -92,6 +129,10 @@ views::ProposedLayout VerticalPinnedTabContainerView::CalculateProposedLayout(
     }
   }
   layouts.host_size = gfx::Size(total_width, total_height);
+  layouts.child_layouts.emplace_back();
+  auto& placeholder_layout = layouts.child_layouts.back();
+  placeholder_layout.child_view = placeholder_label_;
+  placeholder_layout.visible = false;
   return layouts;
 }
 

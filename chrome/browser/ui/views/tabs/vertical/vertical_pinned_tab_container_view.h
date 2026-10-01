@@ -6,9 +6,14 @@
 #define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_VERTICAL_PINNED_TAB_CONTAINER_VIEW_H_
 
 #include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/layout/delegating_layout_manager.h"
 #include "ui/views/view.h"
+
+namespace views {
+class Label;
+}  // namespace views
 
 class TabCollectionNode;
 
@@ -33,6 +38,7 @@ class VerticalPinnedTabContainerView : public views::View,
   void ResetCollectionNode();
 
   raw_ptr<TabCollectionNode> collection_node_;
+  raw_ptr<views::Label> placeholder_label_ = nullptr;
 
   base::CallbackListSubscription node_destroyed_subscription_;
 };

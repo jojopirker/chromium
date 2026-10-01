@@ -1,3 +1,4 @@
 # Set build arguments here. See `gn help buildargs`.
 # target_os = "android"
-target_cpu = "x86"
+target_cpu = "arm64"
+is_debug = false

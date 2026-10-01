@@ -32,7 +32,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(prefs::kTabSearchRightAligned,
                                 GetDefaultTabSearchRightAligned());
   registry->RegisterBooleanPref(
-      prefs::kVerticalTabsEnabled, false,
+      prefs::kVerticalTabsEnabled, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 }
 

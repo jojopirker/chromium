@@ -11,6 +11,10 @@
 #include "ui/views/layout/delegating_layout_manager.h"
 #include "ui/views/view.h"
 
+namespace views {
+class Label;
+}  // namespace views
+
 class TabCollectionNode;
 
 // Container for the vertical tabstrip's unpinned tabs.
@@ -34,6 +38,7 @@ class VerticalUnpinnedTabContainerView : public views::View,
   void ResetCollectionNode();
 
   raw_ptr<TabCollectionNode> collection_node_;
+  raw_ptr<views::Label> placeholder_label_ = nullptr;
 
   base::CallbackListSubscription node_destroyed_subscription_;
 };
